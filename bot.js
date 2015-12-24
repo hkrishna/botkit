@@ -78,6 +78,12 @@ var controller = Botkit.slackbot({
 // but for now, ya know..
 // things  = things.knowledgeable_things.concat(things.likeable_things);
 
+// TODO just look up users from process.env var
+var users = {
+  tom: 'U03KGPALT',
+  harish: 'U088YDDCZ'
+};
+
 var get_random_thing = function() {
   var keys  = Object.keys(things); 
   var key   = keys[Math.floor(Math.random()*keys.length)];
@@ -129,34 +135,41 @@ var follow_up = function(convo, question, success_response, default_response) {
   ]);
 }
 
+var start_convo = function(convo) {
+  var random_thing = get_random_thing();
+  var thing = random_thing.thing;
+  convo.ask('Do you ' + random_thing.verb + ' ' + thing + '?',[
+    {
+      pattern: bot.utterances.yes,
+      callback: function(response,convo) {
+        convo.say("Great! me too");
+        follow_up(convo, "Would you like to teach or spread the knowledge about " + thing + "?");
+        convo.next();
+      }
+    },
+    {
+      pattern: bot.utterances.no,
+      default:true,
+      callback: function(response,convo) {
+        var question = "Would you like to learn about " + thing +"?";
+        var success_response = "awesome! here's a channel for you to join #"+thing;
+        var default_response = "cool story bro";
+
+        follow_up(convo, question, success_response, default_response);
+        convo.next();
+      }
+    }
+  ])
+}
+
+bot.startPrivateConversation({ user: users.harish }, function(err, convo){
+  start_convo(convo);
+});
+
 controller.hears(['question'],'direct_message',function(bot,message) {
 
   bot.startConversation(message,function(err,convo) {
-    var random_thing = get_random_thing();
-    var thing = random_thing.thing;
-
-    convo.ask('Do you ' + random_thing.verb + ' ' + thing + '?',[
-      {
-        pattern: bot.utterances.yes,
-        callback: function(response,convo) {
-          convo.say("Great! me too");
-          follow_up(convo, "Would you like to teach or spread the knowledge about " + thing + "?");
-          convo.next();
-        }
-      },
-      {
-        pattern: bot.utterances.no,
-        default:true,
-        callback: function(response,convo) {
-          var question = "Would you like to learn about " + thing +"?";
-          var success_response = "awesome! here's a channel for you to join #"+thing;
-          var default_response = "cool story bro";
-
-          follow_up(convo, question, success_response, default_response);
-          convo.next();
-        }
-      }
-    ])
+    start_convo(convo);
   });
 })
 
