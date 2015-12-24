@@ -64,120 +64,112 @@ This bot demonstrates many of the core features of Botkit:
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
 
-var Botkit = require('./lib/Botkit.js')
+var Botkit = require('./lib/Botkit.js');
+var things = require('./lib/things.js');
 var os = require('os');
 
 var controller = Botkit.slackbot({
-  debug: false,
+  // debug: true,
 });
+
+// console.log(process.env.token);
+
+// TODO: deal with different skills differently
+// but for now, ya know..
+// things  = things.knowledgeable_things.concat(things.likeable_things);
+
+// TODO just look up users from process.env var
+var users = {
+  tom: 'U03KGPALT',
+  harish: 'U088YDDCZ'
+};
+
+var get_random_thing = function() {
+  var keys  = Object.keys(things); 
+  var key   = keys[Math.floor(Math.random()*keys.length)];
+  var verb  = key == 'likeable_things' ? 'like' : 'know';
+  var thing = things[key];
+
+  return {
+    verb: verb,
+    thing: thing[Math.floor(Math.random() * thing.length)]
+  }
+};
 
 var bot = controller.spawn(
   {
     token:process.env.token
   }
-).startRTM();
+).startRTM(function(err,bot,payload) {
+  if (err) {
+    throw new Error('Could not connect to Slack');
+  }
+});
 
+var port = 3000;
 
-controller.hears(['hello','hi'],'direct_message,direct_mention,mention',function(bot,message) {
+controller.setupWebserver(port,function(err,express_webserver) {
+  controller.createWebhookEndpoints(express_webserver)
+});
 
-  bot.api.reactions.add({
-    timestamp: message.ts,
-    channel: message.channel,
-    name: 'robot_face',
-  },function(err,res) {
-    if (err) {
-      bot.botkit.log("Failed to add emoji reaction :(",err);
-    }
-  });
-
-
-  controller.storage.users.get(message.user,function(err,user) {
-    if (user && user.name) {
-      bot.reply(message,"Hello " + user.name+"!!");
-    } else {
-      bot.reply(message,"Hello.");
-    }
-  });
-})
-
-controller.hears(['call me (.*)'],'direct_message,direct_mention,mention',function(bot,message) {
-  var matches = message.text.match(/call me (.*)/i);
-  var name = matches[1];
-  controller.storage.users.get(message.user,function(err,user) {
-    if (!user) {
-      user = {
-        id: message.user,
+var follow_up = function(convo, question, success_response, default_response) {
+  success_response = success_response || "awesome!";
+  default_response = default_response || "hmm, ok";
+  convo.ask(question ,[
+    {
+      // pattern: new RegExp(/^(pepperoni|sausage)/i),
+      pattern: bot.utterances.yes,
+      callback: function(response,convo) {
+        convo.say(success_response);
+        convo.next();
+      }
+    },
+    {
+      pattern: new RegExp(),
+      default:true,
+      callback: function(response, convo) {
+        convo.say(default_response);
+        convo.next();
       }
     }
-    user.name = name;
-    controller.storage.users.save(user,function(err,id) {
-      bot.reply(message,"Got it. I will call you " + user.name + " from now on.");
-    })
-  })
-});
+  ]);
+}
 
-controller.hears(['what is my name','who am i'],'direct_message,direct_mention,mention',function(bot,message) {
+var start_convo = function(convo) {
+  var random_thing = get_random_thing();
+  var thing = random_thing.thing;
+  convo.ask('Do you ' + random_thing.verb + ' ' + thing + '?',[
+    {
+      pattern: bot.utterances.yes,
+      callback: function(response,convo) {
+        convo.say("Great! me too");
+        follow_up(convo, "Would you like to teach or spread the knowledge about " + thing + "?");
+        convo.next();
+      }
+    },
+    {
+      pattern: bot.utterances.no,
+      default:true,
+      callback: function(response,convo) {
+        var question = "Would you like to learn about " + thing +"?";
+        var success_response = "awesome! here's a channel for you to join #"+thing;
+        var default_response = "cool story bro";
 
-  controller.storage.users.get(message.user,function(err,user) {
-    if (user && user.name) {
-      bot.reply(message,"Your name is " + user.name);
-    } else {
-      bot.reply(message,"I don't know yet!");
+        follow_up(convo, question, success_response, default_response);
+        convo.next();
+      }
     }
-  })
+  ])
+}
+
+bot.startPrivateConversation({ user: users.harish }, function(err, convo){
+  start_convo(convo);
 });
 
-
-controller.hears(['shutdown'],'direct_message,direct_mention,mention',function(bot,message) {
+controller.hears(['question'],'direct_message',function(bot,message) {
 
   bot.startConversation(message,function(err,convo) {
-    convo.ask("Are you sure you want me to shutdown?",[
-      {
-        pattern: bot.utterances.yes,
-        callback: function(response,convo) {
-          convo.say("Bye!");
-          convo.next();
-          setTimeout(function() {
-            process.exit();
-          },3000);
-        }
-      },
-      {
-        pattern: bot.utterances.no,
-        default:true,
-        callback: function(response,convo) {
-          convo.say("*Phew!*");
-          convo.next();
-        }
-      }
-    ])
-  })
+    start_convo(convo);
+  });
 })
 
-
-controller.hears(['uptime','identify yourself','who are you','what is your name'],'direct_message,direct_mention,mention',function(bot,message) {
-
-  var hostname = os.hostname();
-  var uptime = formatUptime(process.uptime());
-
-  bot.reply(message,':robot_face: I am a bot named <@' + bot.identity.name +'>. I have been running for ' + uptime + ' on ' + hostname + ".");
-
-})
-
-function formatUptime(uptime) {
-  var unit = 'second';
-  if (uptime > 60) {
-    uptime = uptime / 60;
-    unit = 'minute';
-  }
-  if (uptime > 60) {
-    uptime = uptime / 60;
-    unit = 'hour';
-  }
-  if (uptime != 1) {
-    unit = unit +'s';
-  }
-
-  uptime = uptime + ' ' + unit;
-  return uptime;
-}
