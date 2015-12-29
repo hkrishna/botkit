@@ -1,82 +1,22 @@
-/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-          ______     ______     ______   __  __     __     ______
-          /\  == \   /\  __ \   /\__  _\ /\ \/ /    /\ \   /\__  _\
-          \ \  __<   \ \ \/\ \  \/_/\ \/ \ \  _"-.  \ \ \  \/_/\ \/
-          \ \_____\  \ \_____\    \ \_\  \ \_\ \_\  \ \_\    \ \_\
-           \/_____/   \/_____/     \/_/   \/_/\/_/   \/_/     \/_/
-
-
-This is a sample Slack bot built with Botkit.
-
-This bot demonstrates many of the core features of Botkit:
-
-* Connect to Slack using the real time API
-* Receive messages based on "spoken" patterns
-* Reply to messages
-* Use the conversation system to ask questions
-* Use the built in storage system to store and retrieve information
-  for a user.
-
-# RUN THE BOT:
-
-  Get a Bot token from Slack:
-
-    -> http://my.slack.com/services/new/bot
-
-  Run your bot from the command line:
-
-    token=<MY TOKEN> node bot.js
-
-# USE THE BOT:
-
-  Find your bot inside Slack to send it a direct message.
-
-  Say: "Hello"
-
-  The bot will reply "Hello!"
-
-  Say: "who are you?"
-
-  The bot will tell you its name, where it running, and for how long.
-
-  Say: "Call me <nickname>"
-
-  Tell the bot your nickname. Now you are friends.
-
-  Say: "who am I?"
-
-  The bot will tell you your nickname, if it knows one for you.
-
-  Say: "shutdown"
-
-  The bot will ask if you are sure, and then shut itself down.
-
-  Make sure to invite your bot into other channels using /invite @<my bot>!
-
-# EXTEND THE BOT:
-
-  Botkit is has many features for building cool and useful bots!
-
-  Read all about it here:
-
-    -> http://howdy.ai/botkit
-
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
-
-
 var Botkit = require('./lib/Botkit.js');
-var things = require('./lib/things.js');
-var os = require('os');
+var questions = require('./fixtures/questions');
+var os = require('os')
+var database = require('./models/db')
+var util = require('util')
+
+var log_if_error = function(err) {
+  if (err) throw console.error("ZOMG " + err)
+}
+
+database(function(err, db) {
+  log_if_error(err)
+})
 
 var controller = Botkit.slackbot({
+  storage: require('./lib/sql_storage')(database)
   // debug: true,
 });
 
-// console.log(process.env.token);
-
-// TODO: deal with different skills differently
-// but for now, ya know..
-// things  = things.knowledgeable_things.concat(things.likeable_things);
 
 // TODO just look up users from process.env var
 var users = {
@@ -84,25 +24,62 @@ var users = {
   harish: 'U088YDDCZ'
 };
 
-var get_random_thing = function() {
-  var keys  = Object.keys(things); 
-  var key   = keys[Math.floor(Math.random()*keys.length)];
-  var verb  = key == 'likeable_things' ? 'like' : 'know';
-  var thing = things[key];
+var sync_users = function(users) {
+  console.log("Importing users ...")
+  database(function(err, db) {
+    log_if_error(err);
 
-  return {
-    verb: verb,
-    thing: thing[Math.floor(Math.random() * thing.length)]
-  }
-};
+    for (user of users) {
+      User.upsert(
+        user.id,
+        {
+          id: user.id,
+          name: user.name,
+          first_name: user.profile.first_name,
+          last_name: user.profile.last_name,
+          real_name: user.profile.real_name,
+          deleted: user.profile.deleted
+        }
+      )
+    }
+
+    console.log("Import complete!")
+    User.count(function(err, val) {
+      console.log("Total users: " + val)  
+    })
+  })
+}
+
+var sync_questions = function(questions) {
+  database(function(err, db){
+    log_if_error(err);
+
+    for (question of questions) {
+      Question.upsert(
+        question[0],
+        {
+          id: question[0],
+          type: question[1],
+          channel: question[2],
+          text: question[3]
+        }
+      )
+    }
+
+    Question.count(function(err, val){
+      console.log("Total questions: " + val)
+    })
+  })
+}
 
 var bot = controller.spawn(
-  {
-    token:process.env.token
-  }
-).startRTM(function(err,bot,payload) {
+  { token:process.env.SLACK_TOKEN }
+).startRTM(function(err, bot, payload) {
   if (err) {
     throw new Error('Could not connect to Slack');
+  } else {
+    sync_users(payload.users)
+    sync_questions(questions)
   }
 });
 
@@ -117,7 +94,6 @@ var follow_up = function(convo, question, success_response, default_response) {
   default_response = default_response || "hmm, ok";
   convo.ask(question ,[
     {
-      // pattern: new RegExp(/^(pepperoni|sausage)/i),
       pattern: bot.utterances.yes,
       callback: function(response,convo) {
         convo.say(success_response);
@@ -136,33 +112,80 @@ var follow_up = function(convo, question, success_response, default_response) {
 }
 
 var start_convo = function(convo) {
-  var random_thing = get_random_thing();
-  var thing = random_thing.thing;
-  convo.ask('Do you ' + random_thing.verb + ' ' + thing + '?',[
-    {
-      pattern: bot.utterances.yes,
-      callback: function(response,convo) {
-        convo.say("Great! me too");
-        follow_up(convo, "Would you like to teach or spread the knowledge about " + thing + "?");
-        convo.next();
-      }
-    },
-    {
-      pattern: bot.utterances.no,
-      default:true,
-      callback: function(response,convo) {
-        var question = "Would you like to learn about " + thing +"?";
-        var success_response = "awesome! here's a channel for you to join #"+thing;
-        var default_response = "cool story bro";
+  database(function(err, db){
+    if (err) throw err
+    var meow = null
+    console.log("Asking a random question to " + convo.source_message.user)
 
-        follow_up(convo, question, success_response, default_response);
-        convo.next();
-      }
-    }
-  ])
+    Question.random(convo.source_message.user, function(err, data) {
+      convo.question = data[0]
+      console.log(util.inspect(convo.question))
+
+      convo.ask(convo.question.text, [
+        {
+          pattern: bot.utterances.yes,
+          callback: function(response,convo) {
+            database(function(err, db) {
+              log_if_error(err);
+
+              Answer.create(
+                {
+                  question_id: convo.question.id,
+                  user_id: convo.source_message.user,
+                  text: "yes"
+                },
+                function(err, answer) {
+                  log_if_error(err);
+                  convo.say("Talk with " + ['foo','bar','baz'].join(', ') + " in #" + convo.question.channel);
+                  // answer.similar(function(err, data) {
+                  //   if (err) throw err
+                  //   console.log(util.inspect(err))
+                  //   convo.say("Talk with " + data.join(', ') + " in #" + convo.question.channel);
+                  // })
+                }
+              );
+            });
+
+            // follow_up(convo, "Would you like to teach or spread the knowledge about " + thing + "?");
+            convo.next();
+          }
+        },
+        {
+          pattern: bot.utterances.no,
+          default:true,
+          callback: function(response, convo) {
+            database(function(err, db) {
+              log_if_error(err);
+
+              Answer.create(
+                {
+                  question_id: convo.question.id,
+                  user_id: convo.source_message.user,
+                  text: "no"
+                },
+                function(err, answer) {
+                  log_if_error(err);
+                  return answer;
+                }
+              );
+            });
+
+            // var question = "Would you like to learn about " + thing +"?";
+            // var success_response = "awesome! here's a channel for you to join #"+thing;
+            // var default_response = "cool story bro";
+
+            // follow_up(convo, question, success_response, default_response);
+            convo.next();
+          }
+        }
+      ])
+
+    })
+  })
+
 }
 
-bot.startPrivateConversation({ user: users.harish }, function(err, convo){
+bot.startPrivateConversation({ user: users.tom }, function(err, convo){
   start_convo(convo);
 });
 
@@ -172,4 +195,3 @@ controller.hears(['question'],'direct_message',function(bot,message) {
     start_convo(convo);
   });
 })
-
